@@ -1,0 +1,36 @@
+[project]
+name = "devpulse"
+version = "0.1.0"
+description = "DevPulse — uptime & latency monitoring API with an in-process async check scheduler"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.141",
+    "uvicorn[standard]>=0.52",
+    "sqlalchemy[asyncio]>=2.0.51",
+    "asyncpg>=0.31",
+    "alembic>=1.19",
+    "httpx>=0.28",
+    "apscheduler>=3.11,<4.0",
+    "pydantic[email]>=2.13",
+    "pydantic-settings>=2.15",
+    "structlog>=26.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.1",
+    "pytest-asyncio>=1.4",
+    "aiosqlite>=0.21",
+]
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["app", "app.services", "app.routers"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
