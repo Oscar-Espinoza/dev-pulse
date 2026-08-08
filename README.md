@@ -90,3 +90,20 @@ pauses checks until the next request wakes it.
 | `HTTP_TIMEOUT_SECONDS` | `10.0` | outbound probe timeout |
 | `ECHO_SQL` | `false` | log SQL statements |
 | `JSON_LOGS` | `false` | JSON log lines instead of pretty console |
+
+## Known limitations
+
+- **SSRF exposure:** monitors can target any URL, including `localhost`,
+  RFC1918 private ranges, and cloud metadata endpoints (e.g.
+  `169.254.169.254`), and can attach arbitrary headers to the outbound probe.
+  This API has no target-URL allowlist/blocklist, and check results
+  (status, timing, error text) are readable back through
+  `GET /monitors/{id}/results` — effectively a probe oracle into whatever
+  network the app runs on. Do not expose this API to untrusted registrants
+  in a real deployment without adding one.
+- **Per-user quota is advisory, not a global cap:** `POST /users` performs no
+  verification, so a malicious actor can register unlimited accounts and
+  multiply their effective check volume well past the per-user
+  `MAX_ACTIVE_MONITORS_PER_USER` limit. Acceptable for a portfolio project;
+  production use would need registration gating (email verification, admin
+  approval, or similar) to make the quota meaningful.
