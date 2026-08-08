@@ -24,7 +24,7 @@ def _validate_interval(interval_seconds: int, settings: Settings) -> None:
     """422 if the requested interval undercuts the configured minimum."""
     if interval_seconds < settings.min_interval_seconds:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 f"interval_seconds must be at least {settings.min_interval_seconds}"
             ),
