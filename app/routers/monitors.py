@@ -1,17 +1,24 @@
 """CRUD for monitors, with per-user limits and live scheduler synchronization."""
 
+from datetime import timedelta
 from typing import Annotated
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
 from app.database import DbSession
 from app.dependencies import CurrentUser, SchedulerDep
-from app.models import CheckResult, Monitor
-from app.schemas import CheckResultRead, MonitorCreate, MonitorRead, MonitorUpdate
+from app.models import CheckResult, Monitor, utcnow
+from app.schemas import (
+    CheckResultRead,
+    MonitorCreate,
+    MonitorRead,
+    MonitorStats,
+    MonitorUpdate,
+)
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -191,3 +198,64 @@ async def list_results(
         .limit(limit)
     )
     return list(result.scalars().all())
+
+
+@router.get("/{monitor_id}/stats", response_model=MonitorStats)
+async def monitor_stats(
+    monitor_id: int,
+    user: CurrentUser,
+    session: DbSession,
+    hours: Annotated[int, Query(ge=1, le=8760)] = 24,
+) -> MonitorStats:
+    """Uptime %, avg latency (successful checks only), and incident count over
+    the last ``hours`` hours, in one aggregation query. An incident is a run of
+    consecutive failures; a run cut by the window's left edge counts once."""
+    await _get_owned_monitor(session, monitor_id, user.id)
+    cutoff = utcnow() - timedelta(hours=hours)
+    windowed = (
+        select(
+            CheckResult.success,
+            CheckResult.response_time_ms,
+            func.lag(CheckResult.success)
+            .over(order_by=(CheckResult.checked_at, CheckResult.id))
+            .label("prev_success"),
+        )
+        .where(CheckResult.monitor_id == monitor_id, CheckResult.checked_at >= cutoff)
+        .cte("windowed")
+    )
+    stmt = select(
+        func.count().label("total_checks"),
+        func.sum(case((windowed.c.success, 1), else_=0)).label("successful_checks"),
+        func.avg(case((windowed.c.success, windowed.c.response_time_ms))).label(
+            "avg_response_time_ms"
+        ),
+        func.sum(
+            case(
+                (
+                    and_(
+                        ~windowed.c.success,
+                        or_(
+                            windowed.c.prev_success.is_(None),
+                            windowed.c.prev_success.is_(True),
+                        ),
+                    ),
+                    1,
+                ),
+                else_=0,
+            )
+        ).label("incident_count"),
+    ).select_from(windowed)
+    row = (await session.execute(stmt)).one()
+    total = row.total_checks
+    return MonitorStats(
+        monitor_id=monitor_id,
+        window_hours=hours,
+        total_checks=total,
+        uptime_percent=round(row.successful_checks / total * 100, 2) if total else None,
+        avg_response_time_ms=(
+            round(row.avg_response_time_ms, 2)
+            if row.avg_response_time_ms is not None
+            else None
+        ),
+        incident_count=row.incident_count or 0,
+    )

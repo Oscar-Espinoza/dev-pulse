@@ -63,6 +63,17 @@ class CheckResultRead(BaseModel):
     error_message: str | None
 
 
+class MonitorStats(BaseModel):
+    """Aggregated check statistics for one monitor over a time window."""
+
+    monitor_id: int
+    window_hours: int
+    total_checks: int
+    uptime_percent: float | None
+    avg_response_time_ms: float | None
+    incident_count: int
+
+
 class UserCreate(BaseModel):
     """Payload for POST /users."""
 

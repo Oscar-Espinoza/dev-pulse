@@ -1,7 +1,9 @@
 """Monitors CRUD: auth, limits, scheduler synchronization, ownership."""
 
+from datetime import datetime, timedelta
+
 from app.config import Settings, get_settings
-from app.models import CheckResult, Monitor, User
+from app.models import CheckResult, Monitor, User, utcnow
 
 VALID_MONITOR = {
     "url": "https://example.com/health",
@@ -226,3 +228,185 @@ async def test_results_returned_newest_first(
     body = response.json()
     assert len(body) == 2
     assert body[0]["id"] > body[1]["id"]
+
+
+# --- stats ----------------------------------------------------------------
+
+async def _seed_checks(
+    session_factory, monitor_id: int, checks: list[tuple[bool, float, datetime]]
+) -> None:
+    """Insert CheckResult rows given as (success, response_time_ms, checked_at)."""
+    async with session_factory() as session:
+        session.add_all(
+            [
+                CheckResult(
+                    monitor_id=monitor_id,
+                    status_code=200 if success else None,
+                    response_time_ms=response_time_ms,
+                    success=success,
+                    checked_at=checked_at,
+                )
+                for success, response_time_ms, checked_at in checks
+            ]
+        )
+        await session.commit()
+
+
+async def test_stats_requires_api_key(client) -> None:
+    response = await client.get("/monitors/1/stats")
+    assert response.status_code == 401
+
+
+async def test_stats_other_users_monitor_is_404(
+    client, auth_headers, session_factory
+) -> None:
+    async with session_factory() as session:
+        other = User(email="stats-other@example.com")
+        monitor = Monitor(
+            user=other, url="https://other.example.com", interval_seconds=60
+        )
+        session.add(monitor)
+        await session.commit()
+        foreign_id = monitor.id
+    response = await client.get(f"/monitors/{foreign_id}/stats", headers=auth_headers)
+    assert response.status_code == 404
+
+
+async def test_stats_empty_window(client, auth_headers) -> None:
+    created = await _create(client, auth_headers)
+    response = await client.get(f"/monitors/{created['id']}/stats", headers=auth_headers)
+    assert response.status_code == 200
+    assert response.json() == {
+        "monitor_id": created["id"],
+        "window_hours": 24,
+        "total_checks": 0,
+        "uptime_percent": None,
+        "avg_response_time_ms": None,
+        "incident_count": 0,
+    }
+
+
+async def test_stats_counts_incident_episodes_not_failed_checks(
+    client, auth_headers, session_factory
+) -> None:
+    """S F F S F -> 2 incidents; avg latency over the successes only."""
+    created = await _create(client, auth_headers)
+    now = utcnow()
+    await _seed_checks(
+        session_factory,
+        created["id"],
+        [
+            (True, 100.0, now - timedelta(minutes=5)),
+            (False, 10_000.0, now - timedelta(minutes=4)),
+            (False, 10_000.0, now - timedelta(minutes=3)),
+            (True, 200.0, now - timedelta(minutes=2)),
+            (False, 10_000.0, now - timedelta(minutes=1)),
+        ],
+    )
+    response = await client.get(f"/monitors/{created['id']}/stats", headers=auth_headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_checks"] == 5
+    assert body["uptime_percent"] == 40.0
+    assert body["avg_response_time_ms"] == 150.0
+    assert body["incident_count"] == 2
+
+
+async def test_stats_excludes_checks_outside_window(
+    client, auth_headers, session_factory
+) -> None:
+    created = await _create(client, auth_headers)
+    now = utcnow()
+    await _seed_checks(
+        session_factory,
+        created["id"],
+        [
+            (False, 10_000.0, now - timedelta(hours=48)),
+            (True, 100.0, now - timedelta(minutes=2)),
+            (True, 300.0, now - timedelta(minutes=1)),
+        ],
+    )
+    response = await client.get(
+        f"/monitors/{created['id']}/stats?hours=24", headers=auth_headers
+    )
+    body = response.json()
+    assert body["total_checks"] == 2
+    assert body["uptime_percent"] == 100.0
+    assert body["avg_response_time_ms"] == 200.0
+    assert body["incident_count"] == 0
+
+
+async def test_stats_all_failures_is_one_incident(
+    client, auth_headers, session_factory
+) -> None:
+    created = await _create(client, auth_headers)
+    now = utcnow()
+    await _seed_checks(
+        session_factory,
+        created["id"],
+        [
+            (False, 10_000.0, now - timedelta(minutes=3)),
+            (False, 10_000.0, now - timedelta(minutes=2)),
+            (False, 10_000.0, now - timedelta(minutes=1)),
+        ],
+    )
+    body = (
+        await client.get(f"/monitors/{created['id']}/stats", headers=auth_headers)
+    ).json()
+    assert body["uptime_percent"] == 0.0
+    assert body["avg_response_time_ms"] is None
+    assert body["incident_count"] == 1
+
+
+async def test_stats_episode_straddling_window_edge_counts_once(
+    client, auth_headers, session_factory
+) -> None:
+    """A failure run that began before the cutoff still counts as exactly one
+    incident inside the window (its first in-window row has no predecessor)."""
+    created = await _create(client, auth_headers)
+    now = utcnow()
+    await _seed_checks(
+        session_factory,
+        created["id"],
+        [
+            (False, 10_000.0, now - timedelta(hours=30)),
+            (False, 10_000.0, now - timedelta(minutes=2)),
+            (False, 10_000.0, now - timedelta(minutes=1)),
+        ],
+    )
+    body = (
+        await client.get(
+            f"/monitors/{created['id']}/stats?hours=24", headers=auth_headers
+        )
+    ).json()
+    assert body["total_checks"] == 2
+    assert body["incident_count"] == 1
+
+
+async def test_stats_ignores_other_monitors_results(
+    client, auth_headers, session_factory
+) -> None:
+    mine = await _create(client, auth_headers)
+    noisy = await _create(client, auth_headers, url="https://example.com/b")
+    now = utcnow()
+    await _seed_checks(
+        session_factory, noisy["id"], [(False, 10_000.0, now - timedelta(minutes=1))]
+    )
+    await _seed_checks(
+        session_factory, mine["id"], [(True, 100.0, now - timedelta(minutes=1))]
+    )
+    body = (
+        await client.get(f"/monitors/{mine['id']}/stats", headers=auth_headers)
+    ).json()
+    assert body["total_checks"] == 1
+    assert body["uptime_percent"] == 100.0
+    assert body["incident_count"] == 0
+
+
+async def test_stats_hours_bounds_validated(client, auth_headers) -> None:
+    created = await _create(client, auth_headers)
+    for bad in (0, 8761):
+        response = await client.get(
+            f"/monitors/{created['id']}/stats?hours={bad}", headers=auth_headers
+        )
+        assert response.status_code == 422
