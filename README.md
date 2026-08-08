@@ -55,6 +55,9 @@ curl -s -X POST localhost:8000/users -H 'content-type: application/json' \
 curl -s -X POST localhost:8000/monitors -H "X-API-Key: <your key>" \
   -H 'content-type: application/json' \
   -d '{"url":"https://example.com","interval_seconds":60}'
+
+# uptime %, avg latency, and incident count over the last 24h
+curl -s "localhost:8000/monitors/<monitor id>/stats?hours=24" -H "X-API-Key: <your key>"
 ```
 
 Interactive docs: http://localhost:8000/docs
