@@ -23,7 +23,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     Startup: engine -> session factory -> shared HTTP client -> scheduler
     (which loads all active monitors and begins checking). Everything is
-    stored on ``app.state`` for dependencies to reach.
+    stored on ``app.state`` for dependencies to reach. ``scheduler.start()``
+    runs inside the ``try`` so that a startup failure (e.g. an unreachable
+    database) still closes the HTTP client and disposes the engine instead
+    of leaking their connection pools.
     """
     settings = get_settings()
     engine = build_engine(settings.database_url, echo=settings.echo_sql)
@@ -37,12 +40,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.session_factory = session_factory
     app.state.scheduler = scheduler
 
-    await scheduler.start()
-    logger.info("app_started")
+    started = False
     try:
+        await scheduler.start()
+        started = True
+        logger.info("app_started")
         yield
     finally:
-        await scheduler.shutdown()
+        if started:
+            await scheduler.shutdown()
         await http_client.aclose()
         await engine.dispose()
         logger.info("app_stopped")
