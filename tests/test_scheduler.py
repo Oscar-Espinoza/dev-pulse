@@ -81,6 +81,26 @@ async def test_sync_monitor_adds_and_removes(session_factory, scheduler) -> None
     assert scheduler.get_job(9) is None
 
 
+async def test_start_survives_poison_interval_row(session_factory, scheduler) -> None:
+    """A pre-existing row with an out-of-range interval_seconds (e.g. from
+    before the schema validation existed) must not abort scheduler startup;
+    the other active monitors must still get scheduled."""
+    async with session_factory() as session:
+        user = User(email="poison@example.com")
+        good = Monitor(user=user, url="https://good.example.com", interval_seconds=60)
+        poison = Monitor(
+            user=user, url="https://poison.example.com", interval_seconds=10**14
+        )
+        session.add_all([good, poison])
+        await session.commit()
+        good_id, poison_id = good.id, poison.id
+
+    await scheduler.start()  # must not raise
+
+    assert scheduler.get_job(good_id) is not None
+    assert scheduler.get_job(poison_id) is None
+
+
 async def test_run_check_survives_unexpected_errors(session_factory) -> None:
     """Even a broken session factory must not propagate out of the job wrapper."""
     def broken_factory() -> None:

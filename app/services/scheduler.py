@@ -54,7 +54,12 @@ class MonitorScheduler:
             )
             monitors = result.scalars().all()
         for monitor in monitors:
-            self.schedule_monitor(monitor.id, monitor.interval_seconds)
+            try:
+                self.schedule_monitor(monitor.id, monitor.interval_seconds)
+            except Exception:
+                logger.exception(
+                    "monitor_schedule_failed_on_startup", monitor_id=monitor.id
+                )
         self._scheduler.start()
         logger.info("scheduler_started", scheduled_jobs=len(monitors))
 

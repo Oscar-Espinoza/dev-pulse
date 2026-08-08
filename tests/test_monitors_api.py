@@ -57,6 +57,17 @@ async def test_interval_below_minimum_rejected(client, auth_headers) -> None:
     assert "60" in response.json()["detail"]
 
 
+async def test_interval_far_above_ceiling_rejected(client, auth_headers) -> None:
+    """A poison interval (would overflow APScheduler's IntervalTrigger) must
+    be rejected at the schema layer, never persisted."""
+    response = await client.post(
+        "/monitors",
+        json={**VALID_MONITOR, "interval_seconds": 10**14},
+        headers=auth_headers,
+    )
+    assert response.status_code == 422
+
+
 async def test_active_monitor_quota_enforced(app, client, auth_headers) -> None:
     app.dependency_overrides[get_settings] = lambda: Settings(
         _env_file=None, max_active_monitors_per_user=2
@@ -143,6 +154,24 @@ async def test_patch_interval_below_minimum_rejected(client, auth_headers) -> No
         headers=auth_headers,
     )
     assert response.status_code == 422
+
+
+async def test_patch_explicit_null_is_ignored_not_applied(
+    client, auth_headers
+) -> None:
+    """Explicit JSON null must be treated like an omitted field, not a value
+    to set — str(None) previously corrupted the url column and broke every
+    subsequent read of the monitor."""
+    created = await _create(client, auth_headers)
+    response = await client.patch(
+        f"/monitors/{created['id']}", json={"url": None}, headers=auth_headers
+    )
+    assert response.status_code == 200
+    assert response.json()["url"] == created["url"]
+
+    refetched = await client.get(f"/monitors/{created['id']}", headers=auth_headers)
+    assert refetched.status_code == 200
+    assert refetched.json()["url"] == created["url"]
 
 
 async def test_reactivating_already_active_monitor_not_blocked_by_quota(

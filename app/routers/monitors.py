@@ -126,7 +126,7 @@ async def update_monitor(
 ) -> Monitor:
     """Partially update a monitor and converge its scheduled job."""
     monitor = await _get_owned_monitor(session, monitor_id, user.id)
-    updates = payload.model_dump(exclude_unset=True)
+    updates = payload.model_dump(exclude_unset=True, exclude_none=True)
     if "url" in updates:
         updates["url"] = str(updates["url"])
 

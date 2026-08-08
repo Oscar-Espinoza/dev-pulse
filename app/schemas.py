@@ -15,7 +15,9 @@ class MonitorBase(BaseModel):
     method: HttpMethod = "GET"
     expected_status: int = Field(default=200, ge=100, le=599)
     interval_seconds: int = Field(
-        ge=1, description="Check period; the API enforces the configured minimum."
+        ge=1,
+        le=31_536_000,
+        description="Check period; the API enforces the configured minimum.",
     )
     headers: dict[str, str] = Field(default_factory=dict)
     is_active: bool = True
@@ -31,7 +33,7 @@ class MonitorUpdate(BaseModel):
     url: HttpUrl | None = None
     method: HttpMethod | None = None
     expected_status: int | None = Field(default=None, ge=100, le=599)
-    interval_seconds: int | None = Field(default=None, ge=1)
+    interval_seconds: int | None = Field(default=None, ge=1, le=31_536_000)
     headers: dict[str, str] | None = None
     is_active: bool | None = None
 
