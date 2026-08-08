@@ -15,8 +15,9 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import StaticPool
 
 from app.database import get_db
+from app.dependencies import get_scheduler
 from app.models import Base, User
-from app.routers import users
+from app.routers import monitors, users
 
 
 @pytest.fixture
@@ -44,21 +45,40 @@ def session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
     return async_sessionmaker(engine, expire_on_commit=False)
 
 
-@pytest.fixture
-def app(session_factory) -> FastAPI:
-    """App with real routers but the DB dependency bound to the test engine.
+class SchedulerSpy:
+    """Records scheduler calls made by API routes (no real APScheduler)."""
 
-    Lifespan is intentionally NOT run (no engine build, no scheduler): routes
-    are tested in isolation. Task 8's smoke test covers the real lifespan.
-    """
+    def __init__(self) -> None:
+        self.synced: list[tuple[int, bool, int]] = []
+        self.removed: list[int] = []
+
+    def sync_monitor(
+        self, monitor_id: int, *, is_active: bool, interval_seconds: int
+    ) -> None:
+        self.synced.append((monitor_id, is_active, interval_seconds))
+
+    def remove_monitor(self, monitor_id: int) -> None:
+        self.removed.append(monitor_id)
+
+
+@pytest.fixture
+def scheduler_spy() -> SchedulerSpy:
+    return SchedulerSpy()
+
+
+@pytest.fixture
+def app(session_factory, scheduler_spy: SchedulerSpy) -> FastAPI:
+    """App with real routers; DB and scheduler dependencies replaced for tests."""
     application = FastAPI()
     application.include_router(users.router)
+    application.include_router(monitors.router)
 
     async def _get_test_db():
         async with session_factory() as session:
             yield session
 
     application.dependency_overrides[get_db] = _get_test_db
+    application.dependency_overrides[get_scheduler] = lambda: scheduler_spy
     return application
 
 
