@@ -15,6 +15,16 @@ services:
           property: connectionString
       - key: JSON_LOGS
         value: "true"
+      # OAuth metadata advertises absolute URLs built from this, so it must be
+      # this service's real public origin (HTTPS, no trailing slash). If it is
+      # wrong, MCP clients fail discovery with an opaque error.
+      #
+      # Written out rather than derived via fromService/property: host, which
+      # would mean this service referencing itself -- undocumented, and a
+      # failure here is silent at deploy time and only shows up as a client
+      # that cannot connect. Update it if the service is ever renamed.
+      - key: MCP_BASE_URL
+        value: https://dev-pulse-wubf.onrender.com
 
 databases:
   - name: dev-pulse-db

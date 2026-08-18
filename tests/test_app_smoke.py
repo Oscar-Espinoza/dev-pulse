@@ -9,8 +9,9 @@ from app.config import get_settings
 from app.models import Base
 
 
-def test_app_boots_serves_and_shuts_down(tmp_path, monkeypatch) -> None:
-    db_url = f"sqlite+aiosqlite:///{tmp_path / 'smoke.db'}"
+def _prepare_database(tmp_path, monkeypatch, name: str) -> None:
+    """Point settings at a fresh sqlite file and create the schema in it."""
+    db_url = f"sqlite+aiosqlite:///{tmp_path / name}"
     monkeypatch.setenv("DATABASE_URL", db_url)
     get_settings.cache_clear()
 
@@ -21,6 +22,10 @@ def test_app_boots_serves_and_shuts_down(tmp_path, monkeypatch) -> None:
         await engine.dispose()
 
     asyncio.run(_create_schema())
+
+
+def test_app_boots_serves_and_shuts_down(tmp_path, monkeypatch) -> None:
+    _prepare_database(tmp_path, monkeypatch, "smoke.db")
 
     from app.main import create_app
 
@@ -42,6 +47,37 @@ def test_app_boots_serves_and_shuts_down(tmp_path, monkeypatch) -> None:
 
             listed = client.get("/monitors", headers=headers)
             assert len(listed.json()) == 1
+
+            # The MCP mount is only assembled by create_app(), which the other
+            # fixtures bypass; unauthenticated it must challenge, not 404.
+            mcp = client.post(
+                "/mcp/",
+                json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+                headers={"Accept": "application/json, text/event-stream"},
+            )
+            assert mcp.status_code == 401
         # exiting the with-block runs shutdown; reaching here means it was clean
+    finally:
+        get_settings.cache_clear()
+
+
+def test_mcp_can_be_switched_off_entirely(tmp_path, monkeypatch) -> None:
+    """MCP_ENABLED=false must remove the whole surface and leave REST intact."""
+    _prepare_database(tmp_path, monkeypatch, "disabled.db")
+    monkeypatch.setenv("MCP_ENABLED", "false")
+    get_settings.cache_clear()
+
+    from app.main import create_app
+
+    app = create_app()
+    try:
+        with TestClient(app) as client:
+            assert client.post("/users", json={"email": "off@example.com"}).status_code == 201
+            for path in (
+                "/mcp/",
+                "/.well-known/oauth-protected-resource/mcp",
+                "/oauth/consent?txn=x",
+            ):
+                assert client.get(path).status_code == 404, path
     finally:
         get_settings.cache_clear()

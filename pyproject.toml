@@ -14,6 +14,9 @@ dependencies = [
     "pydantic[email]>=2.13",
     "pydantic-settings>=2.15",
     "structlog>=26.1",
+    "fastmcp>=3.4.7,<4",
+    # The OAuth consent page posts a form; FastAPI needs this to parse it.
+    "python-multipart>=0.0.20",
 ]
 
 [project.optional-dependencies]
@@ -28,7 +31,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["app", "app.services", "app.routers"]
+packages = ["app", "app.services", "app.routers", "app.mcp"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,6 +23,25 @@ class Settings(BaseSettings):
     max_active_monitors_per_user: int = 20
     min_interval_seconds: int = 60
     http_timeout_seconds: float = 10.0
+    mcp_enabled: bool = True
+    # Public origin of this service, e.g. https://dev-pulse.onrender.com.
+    # OAuth metadata advertises absolute URLs built from this, so if it is
+    # wrong every client fails discovery. It MUST be set in production.
+    mcp_base_url: str = "http://localhost:8000"
+
+    @field_validator("mcp_base_url")
+    @classmethod
+    def _normalize_base_url(cls, value: str) -> str:
+        """Accept a bare hostname and a trailing slash.
+
+        Render's ``fromService``/``property: host`` supplies a hostname with no
+        scheme, and everything downstream needs an absolute origin, so fill in
+        https when the scheme is missing.
+        """
+        value = value.strip().rstrip("/")
+        if "://" not in value:
+            value = f"https://{value}"
+        return value
 
 
 @lru_cache

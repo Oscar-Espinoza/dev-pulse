@@ -18,7 +18,7 @@ Each chapter ends with a **🔍 Try it** section: a few concrete commands to run
 Reading about an event loop teaches you the words; watching a test fail because you broke
 the event loop teaches you the thing.
 
-Budget roughly 30–45 minutes per chapter if you do the exercises. There are 16, so this is
+Budget roughly 30–45 minutes per chapter if you do the exercises. There are 17, so this is
 a week or two of evenings, not an afternoon.
 
 ## Setup (do this once)
@@ -27,7 +27,7 @@ a week or two of evenings, not an afternoon.
 cd /path/to/dev-pulse
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest                    # should print "53 passed"
+pytest                    # should print "87 passed"
 ```
 
 You need the virtual environment active in every terminal where you run `pytest`,
@@ -56,6 +56,7 @@ how that's arranged and why it matters.
 | [13](13-testing-philosophy.md) | Testing philosophy | Why these tests are fast, hermetic, and written before the code |
 | [14](14-case-study-stats.md) | Case study: the stats endpoint | One whole feature reverse-engineered, decisions first |
 | [15](15-what-was-not-built.md) | What wasn't built | Known holes, why they're still there, and what to build next |
+| [16](16-mcp-server.md) | The MCP server | Letting an LLM drive the API, and becoming an OAuth server without adding passwords |
 
 ## Legend
 
@@ -67,7 +68,7 @@ Chapters use four kinds of callout:
 > ⚙️ **FastAPI note:** A framework concept, same rule.
 
 > 💥 **War story:** Something that actually broke, with the cause and the fix. There are
-> five in this guide. They're the most valuable pages here.
+> nine in this guide. They're the most valuable pages here.
 
 > 🔑 **Decision:** A choice with a recorded rationale, including what was rejected.
 

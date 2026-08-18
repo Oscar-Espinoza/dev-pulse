@@ -1,4 +1,4 @@
-"""SQLAlchemy 2.0 ORM models: User, Monitor, CheckResult."""
+"""SQLAlchemy 2.0 ORM models: User, Monitor, CheckResult, and OAuth state."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     DateTime,
     ForeignKey,
     MetaData,
@@ -61,6 +62,12 @@ class User(Base):
     monitors: Mapped[list[Monitor]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    oauth_codes: Mapped[list[OAuthAuthorizationCode]] = relationship(
+        back_populates="user", cascade="all, delete-orphan", passive_deletes=True
+    )
+    oauth_tokens: Mapped[list[OAuthToken]] = relationship(
+        back_populates="user", cascade="all, delete-orphan", passive_deletes=True
+    )
 
 
 class Monitor(Base):
@@ -109,3 +116,111 @@ class CheckResult(Base):
     error_message: Mapped[str | None] = mapped_column(Text(), default=None)
 
     monitor: Mapped[Monitor] = relationship(back_populates="check_results")
+
+
+# --- OAuth 2.1 authorization server state ---------------------------------
+#
+# DevPulse is its own authorization server so that chat clients which can only
+# speak OAuth (ChatGPT) can reach the MCP surface. These four tables hold the
+# whole of that state. They are deliberately separate from ``users``: OAuth
+# adds a way to *present* a credential, not a new kind of credential — the
+# API key remains the only thing that proves who you are.
+#
+# Expiries are epoch seconds rather than timestamps. That is what the OAuth
+# types use, and it avoids a real trap: sqlite discards timezone information,
+# so a DateTime(timezone=True) column round-trips to a naive value that cannot
+# be compared against an aware "now" without raising.
+
+
+class OAuthClient(Base):
+    """An MCP client that registered itself via RFC 7591 dynamic registration.
+
+    The registration document is kept verbatim as JSON rather than being spread
+    across columns: RFC 7591 lets clients send arbitrary extra metadata, and
+    the OAuth library wants the whole object back unchanged.
+    """
+
+    __tablename__ = "oauth_clients"
+
+    client_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    client_name: Mapped[str | None] = mapped_column(String(255), default=None)
+    data: Mapped[dict] = mapped_column(JSONVariant)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+
+
+class OAuthTransaction(Base):
+    """An authorization request parked while the user visits the consent page.
+
+    Created when a client hits ``/authorize`` and consumed when the user
+    approves. Holding the parameters server-side means the consent page can
+    carry nothing but an opaque id, so a tampered redirect_uri never survives
+    the round trip.
+    """
+
+    __tablename__ = "oauth_transactions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    client_id: Mapped[str] = mapped_column(
+        ForeignKey("oauth_clients.client_id", ondelete="CASCADE"), index=True
+    )
+    params: Mapped[dict] = mapped_column(JSONVariant)
+    expires_at: Mapped[int] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+
+
+class OAuthAuthorizationCode(Base):
+    """A single-use code, already bound to the user who approved it.
+
+    Stored rather than signed because single use is the whole point: the row is
+    deleted on redemption, which a self-contained token cannot express.
+    """
+
+    __tablename__ = "oauth_authorization_codes"
+
+    code: Mapped[str] = mapped_column(String(128), primary_key=True)
+    client_id: Mapped[str] = mapped_column(
+        ForeignKey("oauth_clients.client_id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    redirect_uri: Mapped[str] = mapped_column(String(2048))
+    redirect_uri_provided_explicitly: Mapped[bool] = mapped_column()
+    code_challenge: Mapped[str] = mapped_column(String(255))
+    scopes: Mapped[list[str]] = mapped_column(JSONVariant, default=list)
+    resource: Mapped[str | None] = mapped_column(String(2048), default=None)
+    expires_at: Mapped[int] = mapped_column(BigInteger)
+
+    user: Mapped[User] = relationship(back_populates="oauth_codes")
+
+
+class OAuthToken(Base):
+    """An issued access or refresh token.
+
+    Kept in the database rather than minted as a self-contained JWT so that a
+    token can actually be revoked, and so a restart of the free-tier Render
+    instance does not invalidate every connected client.
+    """
+
+    __tablename__ = "oauth_tokens"
+
+    token: Mapped[str] = mapped_column(String(128), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), index=True)  # access | refresh
+    client_id: Mapped[str] = mapped_column(
+        ForeignKey("oauth_clients.client_id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    scopes: Mapped[list[str]] = mapped_column(JSONVariant, default=list)
+    resource: Mapped[str | None] = mapped_column(String(2048), default=None)
+    expires_at: Mapped[int | None] = mapped_column(BigInteger, default=None)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+
+    user: Mapped[User] = relationship(back_populates="oauth_tokens")
