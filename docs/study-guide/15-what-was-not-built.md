@@ -89,6 +89,28 @@ implementation plan, rejected again with one sentence. It's here in the "not bui
 because deleting planned work belongs in the same category as the items above — a decision
 with a reason, worth recording.
 
+## API keys are stored in plaintext
+
+`app/models.py:55` declares `api_key` as a plain `String(64)`, and
+`app/dependencies.py:30` authenticates by comparing the submitted string to it directly.
+Nothing is hashed. Anyone who can read the `users` table — a database dump, a leaked backup,
+an SQL injection anywhere in the app — can authenticate as every user.
+
+The fix is the standard one: store a hash, compare hashes, show the key exactly once at
+creation. It is genuinely small, because the key is already generated server-side and
+returned once (`app/routers/users.py`). What makes it *not* a five-minute change is that
+chapter 16's OAuth provider also looks keys up by equality, so the consent flow and the
+bearer-token fallback both need to hash the incoming value before the lookup.
+
+> 🔑 **Why it's still here:** the same reason as the SSRF above — this is a portfolio
+> project with no real users' data in it, and the hole is more useful documented than
+> quietly patched. But unlike the SSRF, this one has no mitigating argument at all. If you
+> are looking for the single most valuable change to make to this codebase, it is this one.
+
+Note the asymmetry with the OAuth tables: access and refresh tokens are also stored as
+plain strings, which is defensible for short-lived credentials in a way that a permanent
+API key is not.
+
 ## The index that should exist
 
 Chapter 14's query filters on `(monitor_id, checked_at)` together. Chapter 04 gave those
@@ -113,16 +135,19 @@ pair — so it's a genuinely good first contribution.
 
 Roughly in order of value:
 
-1. **The composite index.** `(monitor_id, checked_at)` on `check_results`. Small, benefits
+1. **Hash the API keys.** The one real security bug in here, and the section above walks
+   through why it is slightly bigger than it looks now that OAuth also resolves keys.
+2. **The composite index.** `(monitor_id, checked_at)` on `check_results`. Small, benefits
    two endpoints, and walks you through the full migration loop from chapter 06.
-2. **A results-retention policy.** Nothing ever deletes check results. One monitor is half
+3. **A results-retention policy.** Nothing ever deletes check results. One monitor is half
    a million rows a year. A scheduled job that prunes rows older than N days — or rolls them
    into hourly summaries — is the difference between this running for a year and running for
    a week.
-3. **SSRF protection**, per war story C5.
-4. **Key rotation.** `POST /users/me/rotate-key`. Currently a leaked key can only be dealt
+4. **SSRF protection** on the REST path, per war story C5. Chapter 16 built the guard
+   already; this is a decision about applying it, not new code.
+5. **Key rotation.** `POST /users/me/rotate-key`. Currently a leaked key can only be dealt
    with by abandoning the account.
-5. **Notifications.** The product currently records outages and tells nobody. A webhook
+6. **Notifications.** The product currently records outages and tells nobody. A webhook
    fired on the transition from success to failure is the natural next feature — and note
    that chapter 14's incident logic already knows how to detect that transition.
 
